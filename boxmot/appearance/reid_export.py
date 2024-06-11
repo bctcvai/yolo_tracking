@@ -12,8 +12,7 @@ from torch.utils.mobile_optimizer import optimize_for_mobile
 
 from boxmot.appearance import export_formats
 from boxmot.appearance.backbones import build_model, get_nr_classes
-from boxmot.appearance.reid_model_factory import (get_model_name,
-                                                  load_pretrained_weights)
+from boxmot.appearance.reid_model_factory import get_model_name, load_pretrained_weights
 from boxmot.utils import WEIGHTS
 from boxmot.utils import logger as LOGGER
 from boxmot.utils.checks import TestRequirements
@@ -134,8 +133,13 @@ def export_openvino(file, half):
 def export_tflite(file):
     try:
         __tr.check_packages(
-            ("onnx2tf>=1.15.4", "tensorflow", "onnx_graphsurgeon>=0.3.26", "sng4onnx>=1.0.1"),
-            cmds='--extra-index-url https://pypi.ngc.nvidia.com'
+            (
+                "onnx2tf>=1.15.4",
+                "tensorflow",
+                "onnx_graphsurgeon>=0.3.26",
+                "sng4onnx>=1.0.1",
+            ),
+            cmds="--extra-index-url https://pypi.ngc.nvidia.com",
         )  # requires openvino-dev: https://pypi.org/project/openvino-dev/
         import onnx2tf
 
@@ -177,7 +181,12 @@ def export_engine(model, im, file, half, dynamic, simplify, workspace=4, verbose
 
         builder = trt.Builder(logger)
         config = builder.create_builder_config()
-        config.max_workspace_size = workspace * 1 << 30
+        workspace_arg = workspace * 1 << 30
+        is_trt10 = int(trt.__version__.split(".")[0]) >= 10  # is TensorRT >= 10
+        if is_trt10:
+            config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace)
+        else:  # TensorRT versions 7, 8
+            config.max_workspace_size = workspace
 
         flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
         network = builder.create_network(flag)
@@ -223,8 +232,9 @@ def export_engine(model, im, file, half, dynamic, simplify, workspace=4, verbose
         if builder.platform_has_fast_fp16 and half:
             config.set_flag(trt.BuilderFlag.FP16)
             config.default_device_type = trt.DeviceType.GPU
-        with builder.build_engine(network, config) as engine, open(f, "wb") as t:
-            t.write(engine.serialize())
+        build = builder.build_serialized_network if is_trt10 else builder.build_engine
+        with build(network, config) as engine, open(f, "wb") as t:
+            t.write(engine if is_trt10 else engine.serialize())
         logger.log(
             trt.Logger.INFO, f"Export success, saved as {f} ({file_size(f):.1f} MB)"
         )
